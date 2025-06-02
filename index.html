@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>3D n-Norm Visualization</title>
+    <style>
+        /* ページの余白をなくし、はみ出た要素を隠し、背景色を薄い灰色に設定 */
+        body { margin: 0; overflow: hidden; background-color: #f0f0f0; }
+        /* Three.jsが描画に使う<canvas>要素をブロック要素として扱い、余計な隙間ができないように設定 */
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.164.1/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.164.1/examples/jsm/"
+            }
+        }
+    </script>
+    <script type="module">
+        // Three.jsの主要な機能を `THREE` という名前で使えるように設定
+        import * as THREE from 'three';
+        // マウスで3Dオブジェクトを回転させたりズームしたりするカメラコントロール機能を読み込む。
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        // パラメータを簡単に変更できるユーザーインターフェース（GUI）ライブラリを読み込む。
+        import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+
+        // --- グローバル変数宣言 ---
+        // scene: 3Dオブジェクト、光源、カメラなどを配置する「舞台」
+        // camera: 3D空間をどの視点から見るかを決める「目」
+        // renderer: sceneとcameraの情報をもとに、実際にブラウザに絵を描き出す「描画エンジン」
+        // controls: マウス操作を可能にするためのもの
+        let scene, camera, renderer, controls;
+        // 描画するn-ノルムの3Dオブジェクト（メッシュ）を格納する変数
+        let nNormMesh;
+        // n-ノルムの形状や見た目を制御するためのパラメータをまとめたオブジェクト
+        const params = {
+            n: 2, // ノルムの次数 n の初期値。n=2 は通常の球を表す。
+            radius: 2, // 図形の半径の初期値。
+            segments: 32, // ジオメトリの細かさ。図形をどれだけ滑らかに描画するかの分割数の初期値。
+            wireframe: false, // ワイヤーフレーム表示（線だけで表示）にするかどうか。
+            opacity: 0.8 // 図形の不透明度。1.0で完全に不透明、0.0で完全に透明。
+        };
+
+        // --- 初期化関数 ---
+        // 3Dシーンのセットアップ（シーン、カメラ、レンダラー、ライト、コントロール、GUIなど）を行う。
+        function init() {
+            // --- Scene (シーン) の作成 ---
+            // シーンは、すべての3Dオブジェクト、ライト、カメラのコンテナです。
+            scene = new THREE.Scene();
+            // シーンの背景色を薄い灰色に設定する。
+            scene.background = new THREE.Color(0xe8e8e8);
+
+            // --- Camera (カメラ) の作成 ---
+            // PerspectiveCameraは遠近法を適用するカメラです（遠くのものは小さく見える）。
+            // 引数: 視野角, アスペクト比, ニアクリップ面, ファークリップ面
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            // カメラの位置を(x=3, y=3, z=5)に設定する。
+            camera.position.set(3, 3, 5);
+
+            // --- Renderer (レンダラー) の作成 ---
+            // WebGLRendererはWebGLを使って3Dグラフィックを描画する。
+            // antialias: true はアンチエイリアスを有効にし、オブジェクトの輪郭を滑らかにする。
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            // レンダラーの描画サイズをウィンドウの幅と高さに合わせる。
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            // デバイスのピクセル比に合わせて解像度を調整し、高解像度ディスプレイでも綺麗に表示する。
+            renderer.setPixelRatio(window.devicePixelRatio);
+            // レンダラーが描画するためのHTML要素 (<canvas>) をページの<body>に追加する。
+            document.body.appendChild(renderer.domElement);
+
+            // --- Controls (カメラコントロール) の作成 ---
+            // OrbitControlsを使用すると、マウスでカメラを周回させたり、ズームしたり、パンしたりできる。
+            controls = new OrbitControls(camera, renderer.domElement);
+            // カメラ操作に慣性（ダンピング）を持たせ、滑らかな動きにする。
+            controls.enableDamping = true;
+            // 慣性の強さを設定する。
+            controls.dampingFactor = 0.05;
+
+            // --- Lights (光源) の作成 ---
+            // AmbientLight (環境光): シーン全体を均一に照らす光源。影はできない。
+            // 引数: 光の色, 光の強度
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight); // シーンに環境光を追加
+
+            // DirectionalLight (平行光源): 特定の方向から照らす光源。太陽光に似ている。影ができる。
+            // 引数: 光の色, 光の強度
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
+            // 光源の位置（実際には光の方向を決定するための位置）を設定する。
+            directionalLight.position.set(5, 10, 7.5);
+            scene.add(directionalLight); // シーンに平行光源を追加
+
+            // --- Axes Helper (座標軸ヘルパー) の作成 ---
+            // X軸(赤), Y軸(緑), Z軸(青)を示すヘルパーオブジェクト。デバッグや位置確認に便利。
+            const axisLength = 10; // 軸の長さを定義 (片側)
+
+            // X軸 (赤色)
+            const pointsX = [];
+            pointsX.push(new THREE.Vector3(-axisLength, 0, 0));
+            pointsX.push(new THREE.Vector3(axisLength, 0, 0));
+            const geometryX = new THREE.BufferGeometry().setFromPoints(pointsX);
+            const materialX = new THREE.LineBasicMaterial({ color: 0xff0000 });
+            const xAxisLine = new THREE.Line(geometryX, materialX);
+            scene.add(xAxisLine);
+
+            // Y軸 (緑色)
+            const pointsY = [];
+            pointsY.push(new THREE.Vector3(0, -axisLength, 0));
+            pointsY.push(new THREE.Vector3(0, axisLength, 0));
+            const geometryY = new THREE.BufferGeometry().setFromPoints(pointsY);
+            const materialY = new THREE.LineBasicMaterial({ color: 0x00ff00 });
+            const yAxisLine = new THREE.Line(geometryY, materialY);
+            scene.add(yAxisLine);
+
+            // Z軸 (青色)
+            const pointsZ = [];
+            pointsZ.push(new THREE.Vector3(0, 0, -axisLength));
+            pointsZ.push(new THREE.Vector3(0, 0, axisLength));
+            const geometryZ = new THREE.BufferGeometry().setFromPoints(pointsZ);
+            const materialZ = new THREE.LineBasicMaterial({ color: 0x0000ff });
+            const zAxisLine = new THREE.Line(geometryZ, materialZ);
+            scene.add(zAxisLine);
+
+            // --- Initial n-norm shape (最初のn-ノルム形状の作成と追加) ---
+            createAndAddNNormMesh();
+
+            // --- GUI (グラフィカルユーザーインターフェース) の作成 ---
+            // lil-guiを使って、パラメータをブラウザ上でインタラクティブに変更できるようにする。
+            const gui = new GUI();
+            // 'n' (ノルム値) のスライダー: 最小値0.25, 最大値10, 刻み幅0.01
+            // 値が変更されたら updateNNormMesh 関数を呼び出す
+            gui.add(params, 'n', 0.25, 10, 0.01).name('n (Norm value)').onChange(updateNNormMesh);
+            // 'radius' (半径) のスライダー: 最小値0.5, 最大値5, 刻み幅0.1
+            gui.add(params, 'radius', 0.5, 5, 0.1).name('Radius (R)').onChange(updateNNormMesh);
+            // 'segments' (分割数) のスライダー: 最小値8, 最大値128, 刻み幅4
+            gui.add(params, 'segments', 8, 128, 4).name('Segments').onChange(updateNNormMesh);
+            // 'wireframe' (ワイヤーフレーム表示) のチェックボックス
+            gui.add(params, 'wireframe').name('Wireframe').onChange(updateNNormMeshMaterial);
+            // 'opacity' (不透明度) のスライダー: 最小値0.1, 最大値1.0, 刻み幅0.01
+            gui.add(params, 'opacity', 0.1, 1.0, 0.01).name('Opacity').onChange(updateNNormMeshMaterial);
+
+            // ウィンドウリサイズイベントのリスナーを設定
+            window.addEventListener('resize', onWindowResize);
+            // アニメーションループを開始
+            animate();
+        }
+
+        // --- n-ノルムのジオメトリ（形状データ）を作成する関数 ---
+        // radius: 半径, n: ノルム値, segments: 分割数
+        function createNNormGeometry(radius, n, segments) {
+            // --- 特殊ケースの処理 ---
+            // nがほぼ1の場合 (L1ノルム): 八面体 (Octahedron)
+            if (Math.abs(n - 1) < 0.001) {
+                return new THREE.OctahedronGeometry(radius, 0);
+            }
+            // nがほぼ2の場合 (L2ノルム): 球体 (Sphere)
+            if (Math.abs(n - 2) < 0.001) {
+                return new THREE.SphereGeometry(radius, segments, segments / 2);
+            }
+            // nが非常に大きい場合 (L∞ノルムの近似): 立方体 (Cube)
+            if (n >= 10) { // nが10以上で立方体に近似
+                return new THREE.BoxGeometry(radius * 2, radius * 2, radius * 2);
+            }
+
+            // --- 一般的なn-ノルムのジオメトリ生成 ---
+            // パラメトリック方程式を使用して、n-ノルム球面上の頂点を計算する。
+            // 方程式: |x|^n + |y|^n + |z|^n = R^n
+            // 単位球上の点 (x_unit, y_unit, z_unit) を考え、
+            // それをスケールファクターで調整してn-ノルム球面上の点を得る。
+            // スケールファクター = R / ( |x_unit|^n + |y_unit|^n + |z_unit|^n )^(1/n)
+
+            const geometry = new THREE.BufferGeometry();
+            const vertices = []; // 頂点座標 (x, y, z) を格納する配列
+            const indices = [];  // 面を構成する頂点のインデックスを格納する配列
+
+            const phiSegments = segments; // 水平方向の分割数 (経度方向)
+            const thetaSegments = Math.max(2, segments / 2); // 垂直方向の分割数 (緯度方向)
+
+            // 頂点座標を計算
+            for (let i = 0; i <= thetaSegments; i++) { // theta (垂直方向の角度、vに対応)
+                const v = i / thetaSegments; // 0から1の範囲
+                const theta = v * Math.PI;   // 0からPIの範囲 (極から極へ)
+
+                for (let j = 0; j <= phiSegments; j++) { // phi (水平方向の角度、uに対応)
+                    const u = j / phiSegments;   // 0から1の範囲
+                    const phi = u * Math.PI * 2; // 0から2PIの範囲 (一周)
+
+                    // 単位球上の点の座標 (x_unit, y_unit, z_unit)
+                    let x_unit = Math.sin(theta) * Math.cos(phi);
+                    let y_unit = Math.sin(theta) * Math.sin(phi);
+                    let z_unit = Math.cos(theta);
+
+                    // 0除算やNaNを避けるため、非常に小さい値は0として扱う
+                    const epsilon = 1e-9;
+                    if (Math.abs(x_unit) < epsilon) x_unit = 0;
+                    if (Math.abs(y_unit) < epsilon) y_unit = 0;
+                    if (Math.abs(z_unit) < epsilon) z_unit = 0;
+                    
+                    // n-ノルムの正規化項 (分母) を計算
+                    let denominator;
+                    if (n === Infinity) { // 理論上のL_infinityノルムの場合 (コード上ではn>=10でBoxGeometryになるのでここは実際には通らない可能性が高い)
+                         denominator = Math.max(Math.abs(x_unit), Math.abs(y_unit), Math.abs(z_unit));
+                    } else {
+                         denominator = Math.pow(
+                            Math.pow(Math.abs(x_unit), n) +
+                            Math.pow(Math.abs(y_unit), n) +
+                            Math.pow(Math.abs(z_unit), n),
+                            1 / n
+                        );
+                    }
+
+                    // スケールファクターを計算
+                    let scaleFactor;
+                    if (Math.abs(denominator) < epsilon) { // 分母がほぼ0の場合 (原点など)
+                        scaleFactor = radius; // この場合は半径をそのまま使う (実際には単位球上の点は原点にならないはず)
+                    } else {
+                        scaleFactor = radius / denominator;
+                    }
+                    
+                    // スケーリングされた頂点座標をvertices配列に追加
+                    vertices.push(
+                        scaleFactor * x_unit,
+                        scaleFactor * y_unit,
+                        scaleFactor * z_unit
+                    );
+                }
+            }
+
+            // 面 (indices) を作成
+            // 頂点データを元に三角形の面を定義する。
+            for (let i = 0; i < thetaSegments; i++) {
+                for (let j = 0; j < phiSegments; j++) {
+                    // 四角形を形成する4つの頂点のインデックス
+                    const a = i * (phiSegments + 1) + j;
+                    const b = a + (phiSegments + 1);
+                    const c = a + 1;
+                    const d = b + 1;
+
+                    // 四角形を2つの三角形 (a,b,c) と (b,d,c) に分割してindices配列に追加
+                    indices.push(a, b, c);
+                    indices.push(b, d, c);
+                }
+            }
+
+            // ジオメトリにインデックスと頂点属性を設定
+            geometry.setIndex(indices);
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3)); // 3は各頂点が(x,y,z)の3要素であることを示す
+            // 法線を自動計算して滑らかなシェーディングを実現
+            geometry.computeVertexNormals();
+            return geometry;
+        }
+
+        // --- n-ノルムのメッシュを作成し、シーンに追加する関数 ---
+        function createAndAddNNormMesh() {
+            // 現在のパラメータでジオメトリ（形状）を作成
+            const geometry = createNNormGeometry(params.radius, params.n, params.segments);
+            // メッシュの材質（マテリアル）を設定
+            const material = new THREE.MeshPhongMaterial({ // MeshPhongMaterialは光沢のある表面を表現できる
+                color: 0x0077ff,         // 物体の色 (青色)
+                side: THREE.DoubleSide,  // 面の表裏両方を描画
+                wireframe: params.wireframe, // ワイヤーフレーム表示をパラメータから取得
+                transparent: true,       // 透明度を有効にする
+                opacity: params.opacity  // 不透明度をパラメータから取得
+            });
+            // ジオメトリとマテリアルからメッシュ（3Dオブジェクト）を作成
+            nNormMesh = new THREE.Mesh(geometry, material);
+            // 作成したメッシュをシーンに追加
+            scene.add(nNormMesh);
+        }
+        
+        // --- n-ノルムメッシュのマテリアルプロパティを更新する関数 ---
+        // 主にGUIでwireframeやopacityが変更されたときに呼び出される
+        function updateNNormMeshMaterial() {
+            if (nNormMesh && nNormMesh.material) { // メッシュとマテリアルが存在するか確認
+                nNormMesh.material.wireframe = params.wireframe; // ワイヤーフレーム設定を更新
+                nNormMesh.material.opacity = params.opacity;     // 不透明度設定を更新
+                // マテリアルのプロパティが変更されたことをThree.jsに伝え、再描画を促す
+                // 特に透明度の変更では重要
+                nNormMesh.material.needsUpdate = true;
+            }
+        }
+
+        // --- n-ノルムメッシュ全体を更新する関数 ---
+        // 主にGUIでn, radius, segmentsなど形状に関わるパラメータが変更されたときに呼び出される
+        function updateNNormMesh() {
+            if (nNormMesh) { // 既存のメッシュがあれば
+                scene.remove(nNormMesh); // シーンからメッシュを削除
+                nNormMesh.geometry.dispose(); // 古いジオメトリに関連するメモリを解放
+                nNormMesh.material.dispose(); // 古いマテリアルに関連するメモリを解放
+            }
+            // 新しいパラメータでメッシュを再作成し、シーンに追加
+            createAndAddNNormMesh();
+            // 新しく作成されたメッシュのマテリアルに、現在のwireframeとopacityの設定を再適用
+            updateNNormMeshMaterial();
+        }
+
+        // --- ウィンドウリサイズ時の処理を行う関数 ---
+        function onWindowResize() {
+            // カメラのアスペクト比を新しいウィンドウサイズに合わせて更新
+            camera.aspect = window.innerWidth / window.innerHeight;
+            // カメラのプロジェクション行列（3D空間を2D画面に投影するための情報）を更新
+            camera.updateProjectionMatrix();
+            // レンダラーの描画サイズも新しいウィンドウサイズに合わせる
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // --- アニメーションループ関数 ---
+        // この関数が連続的に呼び出されることで、アニメーションやインタラクションが実現される
+        function animate() {
+            // ブラウザに次の描画タイミングでanimate関数を再度呼び出すよう要求 (スムーズなアニメーションのため)
+            requestAnimationFrame(animate);
+            // OrbitControlsのダンピングを有効にしている場合、ここでコントロールの状態を更新
+            controls.update();
+            // レンダラーに現在のシーンとカメラを使って描画を実行させる
+            renderer.render(scene, camera);
+        }
+
+        // --- 初期化関数の呼び出し ---
+        // すべてのセットアップと描画処理を開始する。
+        init();
+    </script>
+</body>
+</html>
